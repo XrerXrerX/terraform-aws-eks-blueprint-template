@@ -1,0 +1,10 @@
+# Accepted findings. Every entry needs a reason; review them periodically.
+#
+# Internet-facing ALB: the public Ingress group is meant to be public.
+# Protected by WAF, TLS-only listeners and header hardening.
+AVD-AWS-0053
+
+# EKS public endpoint: optional (eks_endpoint_public_access) and CIDR-limited.
+# validate.tf warns if it is opened to 0.0.0.0/0.
+AVD-AWS-0040
+AVD-AWS-0041

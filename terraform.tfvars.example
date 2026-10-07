@@ -1,0 +1,192 @@
+# ---------------------------------------------------------------------------
+# Copy to terraform.tfvars (git-ignored) and adjust.
+#
+# NO SECRETS GO IN THIS FILE. Secret VALUES live in SSM Parameter Store and
+# are written with scripts/put-secrets.sh after the first apply. This file
+# only names WHICH parameter each app reads.
+#
+# All values below are placeholders: example.com, documentation-range IPs
+# (RFC 5737), and the AWS docs' example account ID.
+# ---------------------------------------------------------------------------
+
+# ---- Core ------------------------------------------------------------------
+project             = "myplatform"
+environment         = "prod"
+aws_region          = "us-east-1"
+allowed_account_ids = ["111111111111"]
+
+extra_tags = {
+  Owner      = "platform-team"
+  CostCenter = "engineering"
+}
+
+# ---- Network ---------------------------------------------------------------
+vpc_cidr           = "10.40.0.0/16"
+az_count           = 3
+single_nat_gateway = false # one NAT per AZ in prod
+
+# ---- DNS / edge ------------------------------------------------------------
+root_domain         = "example.com"
+create_route53_zone = false # true = create it here, then delegate NS at your registrar
+
+# Operator / VPN egress. Gates every exposure = "admin" surface.
+admin_allowed_cidrs = ["203.0.113.10/32", "198.51.100.0/28"]
+
+# ---- EKS -------------------------------------------------------------------
+kubernetes_version = "1.34"
+
+# Kubernetes API: keep it CIDR-limited. If CI runs on GitHub-hosted runners
+# (no stable IP), prefer a self-hosted runner in the VPC over 0.0.0.0/0.
+eks_endpoint_public_access = true
+# eks_public_access_cidrs  = ["203.0.113.10/32"]   # null = admin_allowed_cidrs
+
+# Your SSO / break-glass admin role(s):
+# cluster_admin_principal_arns = ["arn:aws:iam::111111111111:role/AWSReservedSSO_AdministratorAccess_xxxx"]
+
+general_node_group = {
+  instance_types = ["m6i.large"]
+  min_size       = 2
+  max_size       = 6
+  desired_size   = 3
+}
+
+# ---- Dedicated RAG node (outside the general pod pool) ----------------------
+rag = {
+  enabled            = true
+  node_instance_type = "r6i.large" # memory-heavy: vector index lives in RAM
+  # node_ami_type    = "AL2023_x86_64_NVIDIA" # + a g5/g6 instance for GPU inference
+
+  ecr_repository   = "rag-api"
+  api_port         = 8000
+  health_path      = "/healthz"
+  worker_command   = ["python", "-m", "app.worker"] # null = no worker container
+  data_volume_gb   = 50
+  vector_volume_gb = 100
+
+  exposure = "admin" # RAG UI/API only from admin_allowed_cidrs
+  hosts    = ["rag"] # rag.example.com
+
+  # Only these apps (from the apps namespace) may call the RAG API in-cluster.
+  allowed_client_apps = ["api"]
+
+  artifacts_bucket = "artifacts"
+  database         = true
+
+  env = {
+    LOG_LEVEL       = "info"
+    EMBEDDING_MODEL = "text-embedding-3-small"
+  }
+  # ENV_VAR => SSM parameter name (/myplatform-prod/<name>)
+  secrets = {
+    LLM_API_KEY     = "RAG_LLM_API_KEY"
+    SERVICE_API_KEY = "RAG_SERVICE_API_KEY" # shared with the api app below
+  }
+}
+
+# ---- Apps (stateless, general pool) ----------------------------------------
+ecr_repositories = ["web", "api", "worker", "admin", "rag-api"]
+
+apps = {
+  # Public SPA / SSR frontend at the apex + www.
+  web = {
+    ecr_repository = "web"
+    port           = 8080
+    exposure       = "public"
+    hosts          = ["", "www"]
+    health_path    = "/"
+    autoscaling    = { min_replicas = 2, max_replicas = 6 }
+    run_as_user    = 101 # nginx-unprivileged
+    writable_paths = ["/var/cache/nginx"]
+  }
+
+  # Public API.
+  api = {
+    ecr_repository = "api"
+    port           = 3000
+    exposure       = "public"
+    hosts          = ["api"]
+    health_path    = "/healthz"
+    autoscaling    = { min_replicas = 2, max_replicas = 10, cpu_target = 70 }
+    resources      = { cpu_request = "250m", memory_request = "512Mi", memory_limit = "1Gi" }
+
+    database   = true
+    redis      = true
+    s3_buckets = ["uploads"]
+    allow_from = ["admin"] # admin app may call the API in-cluster
+
+    env = {
+      NODE_ENV     = "production"
+      CORS_ORIGIN  = "https://example.com"
+      RAG_BASE_URL = "http://rag-api.rag.svc.cluster.local:8000"
+    }
+    secrets = {
+      JWT_SECRET      = "API_JWT_SECRET"
+      RAG_API_KEY     = "RAG_SERVICE_API_KEY"
+      PAYMENT_API_KEY = "API_PAYMENT_API_KEY"
+    }
+  }
+
+  # Background queue consumer: no port => no Service, no Ingress, no probes.
+  worker = {
+    ecr_repository = "worker"
+    command        = ["node", "dist/worker.js"]
+    autoscaling    = { min_replicas = 1, max_replicas = 4 }
+    redis          = true
+    database       = true
+    s3_buckets     = ["uploads", "artifacts"]
+  }
+
+  # Internal admin dashboard, reachable only from admin_allowed_cidrs.
+  admin = {
+    ecr_repository = "admin"
+    port           = 3000
+    exposure       = "admin"
+    hosts          = ["admin"]
+    health_path    = "/api/health"
+    autoscaling    = { min_replicas = 1, max_replicas = 2 }
+    secrets = {
+      SESSION_SECRET = "ADMIN_SESSION_SECRET"
+    }
+  }
+}
+
+# ---- Data stores -----------------------------------------------------------
+database = {
+  engine         = "postgres"
+  engine_version = "16"
+  instance_class = "db.r6g.large"
+  multi_az       = true
+}
+
+redis = {
+  node_type          = "cache.t4g.small"
+  num_cache_clusters = 2
+}
+
+buckets = {
+  uploads   = { glacier_after_days = 90 }
+  artifacts = { retention_days = 30, versioning = false }
+}
+
+# ---- Edge protection -------------------------------------------------------
+waf_rate_rules = [
+  { name = "global", limit = 2000 },
+  { name = "auth", limit = 20, path = "/auth" },
+  { name = "api-auth", limit = 20, path = "/api/auth" },
+  { name = "rag-query", limit = 100, path = "/v1/query" },
+]
+
+# ---- Alerting --------------------------------------------------------------
+alert_emails      = ["oncall@example.com"]
+enable_alb_alarms = false # flip to true after the first full apply (docs/DEPLOY.md)
+
+# ---- CI/CD (GitHub OIDC) ---------------------------------------------------
+github_org = "example-org"
+github_deploy_repos = {
+  web     = "main"
+  api     = "main"
+  worker  = "main"
+  admin   = "main"
+  rag-api = "main"
+}
+create_github_oidc_provider = true # false if the account already has one

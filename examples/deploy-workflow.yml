@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# Example deploy workflow for an APP repository (copy to
+# .github/workflows/deploy.yml in e.g. the `api` repo).
+#
+# Repo variables (Settings -> Variables, not secrets — none of these are secret):
+#   AWS_REGION           e.g. us-east-1
+#   AWS_DEPLOY_ROLE_ARN  terraform output github_deploy_role_arn
+#   ECR_REGISTRY         terraform output ecr_registry
+#   ECR_REPOSITORY       <project>/api
+#   EKS_CLUSTER          terraform output cluster_name
+#   K8S_NAMESPACE        apps            (rag for the RAG repo)
+#   K8S_WORKLOAD         deployment/api  (statefulset/rag for the RAG repo)
+#   K8S_CONTAINER        api             (api for the RAG repo)
+#
+# The branch must match github_deploy_repos in terraform.tfvars, or
+# AssumeRoleWithWebIdentity is denied.
+# ---------------------------------------------------------------------------
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write # GitHub OIDC -> AWS
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      # Immutable tag = git SHA. ECR rejects re-pushing an existing tag.
+      - name: Build and push
+        env:
+          IMAGE: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Roll out
+        env:
+          IMAGE: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          aws eks update-kubeconfig --name "${{ vars.EKS_CLUSTER }}" --region "${{ vars.AWS_REGION }}"
+          kubectl -n "${{ vars.K8S_NAMESPACE }}" set image "${{ vars.K8S_WORKLOAD }}" \
+            "${{ vars.K8S_CONTAINER }}=$IMAGE"
+          kubectl -n "${{ vars.K8S_NAMESPACE }}" rollout status "${{ vars.K8S_WORKLOAD }}" --timeout=10m

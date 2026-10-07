@@ -1,0 +1,49 @@
+# --- Terraform working files & state: NEVER commit -------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Commit .terraform.lock.hcl in YOUR fork (reproducible provider builds).
+# It is ignored in the template itself so the template has no pinned hashes.
+.terraform.lock.hcl
+
+# --- Environment-specific configuration: keep only the *.example files -----
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+!backend.hcl.example
+
+# --- Credentials / secrets ---------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets.env
+*.secrets.env
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials
+.aws/
+kubeconfig*
+*.kubeconfig
+
+# --- Editors / OS ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
