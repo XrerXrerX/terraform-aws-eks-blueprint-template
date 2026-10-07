@@ -75,7 +75,7 @@ What the template enforces, and where. "Module" paths are under `modules/`.
 * `scripts/put-secrets.sh` writes through a temp file (not argv / history)
   and only to parameters Terraform declared, encrypted with the platform key.
 * `.gitignore` excludes tfvars, backend config, state, env files, keys,
-  kubeconfigs. CI runs gitleaks over the full history.
+  kubeconfigs. The pre-commit hooks run gitleaks before every commit.
 
 ## Known trade-offs (read these)
 

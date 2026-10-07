@@ -50,7 +50,7 @@ adding a map entry, not by writing new Terraform.
 | **Edge** | One ACM cert, WAF (IP reputation, anonymous IP, OWASP common, bad inputs, SQLi, rate limits), HSTS & security headers, CAA record |
 | **Ops** | CloudWatch alarms (pods, crash loops, OOM risk, nodes, RAG node/volumes, RDS, Redis, ALB 5xx/latency) → SNS |
 | **CI/CD** | GitHub OIDC (no static keys), deploy role limited to own ECR repos + `patch` on workloads in app namespaces |
-| **Quality** | `terraform test` with mocked providers (no credentials needed), tflint, trivy, gitleaks, pre-commit |
+| **Quality** | `terraform test` with mocked providers (no credentials needed), tflint in CI; gitleaks via pre-commit |
 
 ## No secrets in git, tfvars, or state
 
